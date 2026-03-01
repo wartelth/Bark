@@ -1,3 +1,7 @@
+> **Disclaimer.** This work is conducted in collaboration with veterinarians. No real prosthesis has been used on animals in real life. Data collection is carried out solely using a sensor jacket (IMU vest) worn by dogs to gather movement data; no prosthetic devices are attached to or tested on live animals.
+
+---
+
 # BARK — Bionic Artificial Robotic Kinetics
 
 ![BARK](dog_gemini.png)
