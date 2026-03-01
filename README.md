@@ -47,6 +47,20 @@ python -m train.train_rl --config configs/ppo_ant_3leg.yaml --comet
 
 Both log training curves (episode reward, loss, etc.). W&B also supports video logging via its SB3 integration.
 
+## Adversarial Motion Priors (AMP)
+
+AMP rewards the policy for producing state transitions (s, s') that look like reference (expert) motion. A discriminator is trained to tell expert vs policy transitions; the policy gets a style reward for fooling it.
+
+1. **Collect expert rollouts** (same format as IL):  
+   `python -m train.train_il --config configs/bc_ant_3leg.yaml --collect_demos 50`  
+   This writes `demos/expert_rollouts.npz` (or set path via `--expert_path`).
+
+2. **Train with AMP**:  
+   `python -m train.train_rl --config configs/ppo_ant_3leg_amp.yaml`  
+   Set `amp.expert_path` in the config to your `.npz` path. Tune `amp.style_weight` to balance task reward vs style (e.g. `1.0`).
+
+Config: `amp.enabled`, `amp.expert_path`, `amp.style_weight`, `amp.disc_lr`, `amp.disc_batch_size`, `amp.max_transitions`, etc.
+
 ## Jacket data
 
 Place jacket CSV files (IMU1–IMU3 as features, IMU4 as target) in `data/raw/` or set `data.jacket_csv` in config. Use `scripts/jacket_to_reference.py` to convert to reference trajectories for reward shaping or IL.

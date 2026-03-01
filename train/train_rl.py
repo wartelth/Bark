@@ -26,10 +26,19 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def make_env(env_id: str, env_kwargs: dict, seed: int = 0):
+def make_env(
+    env_id: str,
+    env_kwargs: dict,
+    seed: int = 0,
+    amp_disc=None,
+    amp_style_weight: float = 1.0,
+):
     def _init():
         e = gym.make(env_id, **env_kwargs)
         e = Monitor(e)
+        if amp_disc is not None:
+            from envs.amp_wrapper import AMPRewardWrapper
+            e = AMPRewardWrapper(e, amp_disc, style_weight=amp_style_weight)
         e.reset(seed=seed)
         return e
     return _init
@@ -51,10 +60,68 @@ def main():
     env_id = config.get("env_id", "BarkAnt3Leg-v0")
     env_kwargs = config.get("env_kwargs", {})
 
-    n_envs = 1
-    vec_env = DummyVecEnv([make_env(env_id, env_kwargs, seed=args.seed + i) for i in range(n_envs)])
+    amp_config = config.get("amp") or {}
+    amp_enabled = amp_config.get("enabled", False)
+    amp_disc = None
+    amp_trainer = None
+    amp_style_weight = float(amp_config.get("style_weight", 1.0))
 
-    eval_env = DummyVecEnv([make_env(env_id, env_kwargs, seed=args.seed + 100)])
+    if amp_enabled:
+        expert_path = amp_config.get("expert_path")
+        if not expert_path:
+            raise ValueError("amp.enabled is true but amp.expert_path is not set")
+        expert_path = Path(expert_path)
+        if not expert_path.is_absolute():
+            expert_path = _repo_root / expert_path
+        if not expert_path.exists():
+            raise FileNotFoundError(f"AMP expert path not found: {expert_path}")
+        # Get obs_dim from env
+        _tmp = gym.make(env_id, **env_kwargs)
+        obs_dim = int(_tmp.observation_space.shape[0])
+        _tmp.close()
+        from train.amp import (
+            AMPDiscriminator,
+            AMPTrainer,
+            load_reference_transitions,
+        )
+        ref_trans = load_reference_transitions(
+            expert_path,
+            obs_dim=obs_dim,
+            max_transitions=amp_config.get("max_transitions"),
+        )
+        amp_disc = AMPDiscriminator(
+            obs_dim,
+            hidden_dims=tuple(amp_config.get("disc_hidden", [256, 256])),
+            dropout=float(amp_config.get("disc_dropout", 0.1)),
+        )
+        amp_trainer = AMPTrainer(
+            amp_disc,
+            ref_trans,
+            lr=float(amp_config.get("disc_lr", 1e-4)),
+            batch_size=int(amp_config.get("disc_batch_size", 256)),
+        )
+
+    n_envs = 1
+    vec_env = DummyVecEnv([
+        make_env(
+            env_id,
+            env_kwargs,
+            seed=args.seed + i,
+            amp_disc=amp_disc,
+            amp_style_weight=amp_style_weight,
+        )
+        for i in range(n_envs)
+    ])
+
+    eval_env = DummyVecEnv([
+        make_env(
+            env_id,
+            env_kwargs,
+            seed=args.seed + 100,
+            amp_disc=amp_disc,
+            amp_style_weight=amp_style_weight,
+        )
+    ])
     save_path = Path(args.save_path)
     save_path.mkdir(parents=True, exist_ok=True)
     eval_freq = config.get("eval_freq", 5000)
@@ -71,6 +138,10 @@ def main():
     )
 
     callbacks = [eval_callback]
+    if amp_trainer is not None:
+        from train.callbacks import AMPCallback
+        callbacks.append(AMPCallback(amp_trainer, verbose=1))
+
     alg_name = config.get("algorithm", "PPO")
     algo_kwargs = {
         "env": vec_env,

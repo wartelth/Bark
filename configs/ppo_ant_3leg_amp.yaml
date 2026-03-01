@@ -1,0 +1,33 @@
+# PPO + Adversarial Motion Priors (AMP)
+# Use expert rollouts (e.g. from train_il --collect_demos or a BC policy) as reference motion.
+# The discriminator rewards the policy for (s,s') transitions that look like the expert.
+algorithm: PPO
+batch_size: 64
+clip_range: 0.2
+ent_coef: 0.0
+env_id: BarkAnt3Leg-v0
+env_kwargs: {}
+eval_freq: 5000
+gae_lambda: 0.95
+gamma: 0.99
+learning_rate: 0.0003
+log_interval: 10
+max_grad_norm: 0.5
+n_epochs: 10
+n_eval_episodes: 5
+n_steps: 2048
+project_name: bark-rl
+run_name: null
+save_freq: 25000
+total_timesteps: 500000
+vf_coef: 0.5
+
+amp:
+  enabled: true
+  expert_path: demos/expert_rollouts.npz   # .npz with "obs" (list of traj arrays), "acts"
+  style_weight: 1.0                         # weight for AMP reward vs task reward
+  max_transitions: 50000                    # cap expert transitions (optional)
+  disc_lr: 0.0001
+  disc_batch_size: 256
+  disc_hidden: [256, 256]
+  disc_dropout: 0.1
