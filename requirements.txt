@@ -1,0 +1,24 @@
+# BARK RL Training Pipeline
+# Core
+numpy>=1.24,<2
+pandas>=2.0
+pyyaml>=6.0
+
+# Simulation
+gymnasium>=0.29
+gymnasium[mujoco]>=0.29
+mujoco>=3.0
+
+# RL
+stable-baselines3>=2.2
+sb3-contrib>=2.2
+
+# Experiment tracking (use one or both)
+wandb>=0.16
+# comet-ml>=3.35
+
+# Imitation learning (optional)
+imitation>=0.5
+
+# Optional: for reference trajectory metrics
+scipy>=1.11

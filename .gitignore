@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Training outputs
+models/
+demos/
+*.npz
+il_out.txt
+train_il_args.txt
+
+# Data (keep structure, ignore large/raw)
+data/raw/*.csv
+data/refs/*.npy
+!data/raw/.gitkeep
+!data/refs/.gitkeep
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Logs
+*.log
+wandb/
+comet/

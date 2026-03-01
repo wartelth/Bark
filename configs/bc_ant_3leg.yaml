@@ -1,0 +1,7 @@
+# Behavioral cloning on BarkAnt3Leg
+env_id: BarkAnt3Leg-v0
+batch_size: 64
+learning_rate: 3.0e-4
+n_epochs: 10
+max_episode_steps: 500
+save_path: models/il_bc

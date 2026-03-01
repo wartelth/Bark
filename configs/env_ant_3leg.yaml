@@ -1,0 +1,18 @@
+# BarkAnt3Leg environment config
+env_id: BarkAnt3Leg-v0
+
+# Sim-to-real: observation noise (e.g. 0.02 for domain randomization)
+obs_noise_std: 0.0
+
+# Reward weights
+reward_forward: 1.0
+reward_healthy: 1.0
+reward_ctrl: -0.001
+reward_survive: 0.0  # optional small survival bonus
+
+# Leg indexing (Ant: 0-1 front, 2-3 back; we treat leg 3 as "4th" / prosthetic)
+prosthetic_leg_index: 3
+
+# Optional: reference trajectory from jacket (path to .npy or null)
+reference_trajectory_path: null
+reference_reward_weight: 0.0
