@@ -1,5 +1,7 @@
 # BARK — Bionic Artificial Robotic Kinetics
 
+![BARK](bark.png)
+
 RL/IL training pipeline to learn how one dog leg depends on the other three, for prosthetic leg prediction. Uses MuJoCo + Gymnasium for simulation, Stable-Baselines3 for RL, and W&B (or Comet) for training visualization. Jacket (IMU vest) data supports sim-to-real alignment.
 
 ## Setup
