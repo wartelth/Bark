@@ -66,3 +66,40 @@ class AMPCallback(BaseCallback):
         if self.logger and logs:
             for k, v in logs.items():
                 self.logger.record(k, v)
+
+
+# Ant action space: 8D = leg0(0,1), leg1(2,3), leg2(4,5), leg3(6,7); leg3 is prosthetic/inferred
+LEG_ACTION_INDICES = [(0, 2), (2, 4), (4, 6), (6, 8)]  # leg 0, 1, 2, 3
+
+
+class LegMetricsCallback(BaseCallback):
+    """
+    Logs per-leg action statistics so you can compare if the prosthetic leg (leg 3)
+    trains to behave like the observed legs (0, 1, 2). Records mean and std of
+    |action| per leg group to TensorBoard/logger.
+    """
+
+    def _on_step(self) -> bool:
+        return True
+
+    def _on_rollout_end(self) -> None:
+        buffer = self.model.rollout_buffer
+        if not hasattr(buffer, "actions") or buffer.actions is None:
+            return
+        actions = np.asarray(buffer.actions)  # (n_steps, n_envs, 8)
+        if actions.size == 0 or actions.shape[-1] != 8:
+            return
+        flat = actions.reshape(-1, 8)
+        for leg_idx, (lo, hi) in enumerate(LEG_ACTION_INDICES):
+            leg_acts = flat[:, lo:hi]
+            mean_mag = np.abs(leg_acts).mean()
+            std_mag = np.abs(leg_acts).std()
+            if self.logger:
+                self.logger.record(f"leg_{leg_idx}_action_mean_abs", float(mean_mag))
+                self.logger.record(f"leg_{leg_idx}_action_std_abs", float(std_mag))
+        # Ratio: prosthetic (leg 3) vs average of legs 0,1,2 — "like the missing one"
+        leg3_mag = np.abs(flat[:, 6:8]).mean()
+        other_mag = np.abs(flat[:, 0:6]).mean()
+        ratio = float(leg3_mag / (other_mag + 1e-8))
+        if self.logger:
+            self.logger.record("leg3_vs_others_action_ratio", ratio)

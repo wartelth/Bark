@@ -50,7 +50,9 @@ def main():
     parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases logging")
     parser.add_argument("--comet", action="store_true", help="Enable Comet ML logging (set COMET_API_KEY)")
     parser.add_argument("--save_path", type=str, default="models", help="Directory to save model checkpoints")
+    parser.add_argument("--tb_dir", type=str, default="logs/tensorboard", help="TensorBoard log directory (set to empty to disable)")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--timesteps", type=int, default=None, help="Override total_timesteps from config")
     args = parser.parse_args()
     _repo_root = Path(__file__).resolve().parent.parent
     config_path = Path(args.config)
@@ -124,6 +126,10 @@ def main():
     ])
     save_path = Path(args.save_path)
     save_path.mkdir(parents=True, exist_ok=True)
+    tb_log = None
+    if args.tb_dir:
+        tb_log = str(_repo_root / args.tb_dir)
+        Path(tb_log).mkdir(parents=True, exist_ok=True)
     eval_freq = config.get("eval_freq", 5000)
     n_eval_episodes = config.get("n_eval_episodes", 5)
     save_freq = config.get("save_freq", 25000)
@@ -141,13 +147,16 @@ def main():
     if amp_trainer is not None:
         from train.callbacks import AMPCallback
         callbacks.append(AMPCallback(amp_trainer, verbose=1))
+    from train.callbacks import LegMetricsCallback
+    callbacks.append(LegMetricsCallback(verbose=0))
 
     alg_name = config.get("algorithm", "PPO")
+    run_name = config.get("run_name") or f"{config.get('algorithm', 'PPO')}_{env_id}_seed{args.seed}"
     algo_kwargs = {
         "env": vec_env,
         "seed": args.seed,
         "verbose": 1,
-        "tensorboard_log": None,
+        "tensorboard_log": tb_log,
     }
     if alg_name == "PPO":
         algo_kwargs.update(
@@ -212,7 +221,7 @@ def main():
         except Exception as e:
             print("Comet not available:", e)
 
-    total_timesteps = config.get("total_timesteps", 500_000)
+    total_timesteps = args.timesteps if args.timesteps is not None else config.get("total_timesteps", 500_000)
     model.learn(total_timesteps=total_timesteps, callback=callbacks, progress_bar=True)
     model.save(save_path / "final_model")
     vec_env.close()

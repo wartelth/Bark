@@ -22,3 +22,7 @@ imitation>=0.5
 
 # Optional: for reference trajectory metrics
 scipy>=1.11
+
+# Visualization (scripts/visualize_training.py)
+matplotlib>=3.7
+tensorboard>=2.14

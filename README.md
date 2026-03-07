@@ -47,6 +47,25 @@ python -m train.train_rl --config configs/ppo_ant_3leg.yaml --comet
 
 Both log training curves (episode reward, loss, etc.). W&B also supports video logging via its SB3 integration.
 
+**TensorBoard and per-leg metrics**  
+Training logs to TensorBoard by default (`logs/tensorboard`). A custom callback records **per-leg action statistics** so you can check whether the prosthetic leg (leg 3) learns to behave like the observed legs (0–2):
+
+```bash
+# Train (TensorBoard logs + per-leg metrics)
+PYTHONPATH=. python -m train.train_rl --config configs/ppo_ant_3leg.yaml --tb_dir logs/tensorboard
+
+# Optional: override timesteps for a quick run
+PYTHONPATH=. python -m train.train_rl --config configs/ppo_ant_3leg.yaml --timesteps 100000
+
+# Plot reward curves and per-leg action magnitude (does leg 3 train like the others?)
+PYTHONPATH=. python scripts/visualize_training.py --logdir logs/tensorboard --out logs/figures
+
+# Compare multiple runs (e.g. different seeds)
+PYTHONPATH=. python scripts/visualize_training.py --logdir logs/tensorboard --all-runs --out logs/figures
+```
+
+Figures are saved under `logs/figures/`: `training_reward.png` (reward and episode length) and `per_leg_actions.png` (mean |action| per leg and leg3/others ratio; ratio near 1 means the prosthetic leg is acting like the observed legs).
+
 ## Adversarial Motion Priors (AMP)
 
 AMP rewards the policy for producing state transitions (s, s') that look like reference (expert) motion. A discriminator is trained to tell expert vs policy transitions; the policy gets a style reward for fooling it.
