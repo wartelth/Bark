@@ -1,0 +1,11 @@
+# BarkGo1_3Leg environment config (Unitree Go1 dog-like quadruped)
+env_id: BarkGo1_3Leg-v0
+
+# Sim-to-real: observation noise
+obs_noise_std: 0.0
+
+# Reward weights (Go1 uses stronger motors; ctrl_cost_weight in env default 0.05)
+prosthetic_leg_index: 3
+
+# Optional: path to Go1 scene.xml if not using default (assets/ or third_party/)
+# xml_file: null

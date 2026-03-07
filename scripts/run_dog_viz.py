@@ -1,14 +1,21 @@
 """
-Spawn the Bark Ant quadruped in MuJoCo and run it with 3D visualization.
+Spawn the Bark Ant or Go1 quadruped in MuJoCo and run it with 3D visualization.
 Use a trained policy (PPO/SAC) or random actions. Optional video recording.
 
-Usage:
-  PYTHONPATH=. python scripts/run_dog_viz.py
-  PYTHONPATH=. python scripts/run_dog_viz.py --model models/best.zip --episodes 10
-  PYTHONPATH=. python scripts/run_dog_viz.py --config configs/env_ant_3leg.yaml --record --video-folder logs/videos
+Usage (from repo root):
+  python scripts/run_dog_viz.py
+  python scripts/run_dog_viz.py --config configs/ppo_go1_3leg.yaml
+  python scripts/run_dog_viz.py --model models/best.zip --episodes 10
+  On Windows PowerShell, no PYTHONPATH needed; from Bash use PYTHONPATH=. if needed.
 """
 import argparse
+import sys
 from pathlib import Path
+
+# Add repo root so "envs" and "train" resolve when run as: python scripts/run_dog_viz.py
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 import yaml
 import gymnasium as gym

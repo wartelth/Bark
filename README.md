@@ -16,9 +16,9 @@ A core part of the stack is **real-world data**. We collect movement from health
 
 The project combines several research directions into one pipeline:
 
-- **Reinforcement learning (RL)** — An agent in simulation learns to move a quadruped (Ant) forward and stay healthy. The twist: the observation space hides the fourth leg’s state, so the policy must *infer* how that leg should move from the other three. That mimics the prosthetic setting: we only “see” the healthy legs and must predict the missing one.
+- **Reinforcement learning (RL)** — An agent in simulation learns to move a quadruped forward and stay healthy. The twist: the observation space hides the fourth leg’s state, so the policy must *infer* how that leg should move from the other three. That mimics the prosthetic setting: we only “see” the healthy legs and must predict the missing one.
 - **Imitation learning (IL)** — We can pre-train or shape behavior using expert data (e.g. from the jacket or from scripted gaits). Behavioural cloning (BC) and optional Adversarial Motion Priors (AMP) let the policy imitate reference motion while still optimising for task rewards.
-- **Simulation and 3D viz** — MuJoCo (via Gymnasium) provides the physics and the quadruped model. Training runs headless; a separate script lets you spawn the dog in a 3D window and watch it walk or run, with or without a trained policy.
+- **Simulation and 3D viz** — MuJoCo (via Gymnasium) provides the physics. You can use either a **generic Ant** (quick to run, 8 joints) or a **dog-like Unitree Go1** (12 joints, realistic shape and gait). Training runs headless; a separate script lets you spawn the robot in a 3D window and watch it walk or run, with or without a trained policy.
 - **Sim-to-real** — Jacket CSV data is loaded, converted to reference trajectories, and used for reward shaping or IL. Domain randomization (e.g. observation noise) and calibration docs help narrow the sim-to-real gap when moving toward real hardware.
 
 So in one place you get: **real measurements (jacket)** → **reference trajectories and rewards** → **RL/IL training in MuJoCo** → **3D visualization and (future) deployment**.
@@ -43,21 +43,36 @@ Main dependencies: `gymnasium[mujoco]`, `mujoco`, `stable-baselines3`, `imitatio
 
 | Folder     | Role |
 |-----------|------|
-| **envs/** | Gymnasium environments. The main one is **BarkAnt3Leg**: Ant quadruped with observation masked to torso + legs 0–2 (23 dims); action is full 8D so the policy must drive the “prosthetic” leg (leg 3) from the other three. |
+| **envs/** | Gymnasium environments. **BarkAnt3Leg**: generic Ant quadruped (8 joints, 23-dim obs, 8D action). **BarkGo1_3Leg**: dog-like Unitree Go1 (12 joints, 31-dim obs, 12D action). Both mask leg 3 from the observation so the policy predicts the prosthetic leg from the other three. |
 | **train/** | RL (PPO/SAC) and IL (BC) training scripts, AMP discriminator training, callbacks for TensorBoard and per-leg metrics. |
 | **data/** | Jacket CSV loaders and utilities to build reference trajectories (`.npy`) for reward shaping or IL. |
-| **configs/** | YAML configs for env, PPO/SAC, BC, and AMP. |
-| **scripts/** | `jacket_to_reference.py` (CSV → reference), `visualize_training.py` (reward and per-leg plots), `run_dog_viz.py` (3D sim viewer). |
+| **configs/** | YAML configs for env, PPO/SAC, BC, and AMP (Ant and Go1). |
+| **scripts/** | `jacket_to_reference.py` (CSV → reference), `visualize_training.py` (reward and per-leg plots), `run_dog_viz.py` (3D sim viewer), `get_go1_model.py` (download Go1 assets). |
+| **assets/** | Optional: `unitree_go1/` (scene.xml, go1.xml, meshes) after running `get_go1_model.py`. |
 | **docs/** | Sim-to-real and jacket calibration ([SIM_TO_REAL.md](docs/SIM_TO_REAL.md)). |
 
 ---
 
 ## Quick start: train and evaluate
 
+**Option A — Generic Ant (no extra setup)**  
 Train a PPO policy on the 3-leg→4th-leg Ant env (from repo root; on Windows PowerShell use `$env:PYTHONPATH=".";` instead of `PYTHONPATH=.`):
 
 ```bash
 PYTHONPATH=. python -m train.train_rl --config configs/ppo_ant_3leg.yaml
+```
+
+**Option B — Dog-like Unitree Go1**  
+The Go1 is a more realistic dog-shaped quadruped. First, download the model (run once):
+
+```bash
+PYTHONPATH=. python scripts/get_go1_model.py
+```
+
+Then train with the Go1 config:
+
+```bash
+PYTHONPATH=. python -m train.train_rl --config configs/ppo_go1_3leg.yaml
 ```
 
 Training logs to TensorBoard by default (`logs/tensorboard`). A custom callback logs **per-leg action statistics**: you can check whether the prosthetic leg (leg 3) learns to behave like the observed legs (0–2). After training, plot reward curves and per-leg metrics:
@@ -97,7 +112,7 @@ PYTHONPATH=. python scripts/run_dog_viz.py --model models/best.zip --episodes 10
 $env:PYTHONPATH="."; python scripts/run_dog_viz.py --model models/best.zip --episodes 10
 ```
 
-Options: `--config`, `--seed`, `--no-render` (headless), `--record` (save video to `--video-folder`). The robot is the same Ant used in training; the viewer needs a display (on headless machines use `--no-render` or `--record` with a virtual display if needed).
+Options: `--config`, `--seed`, `--no-render` (headless), `--record` (save video to `--video-folder`). Use `--config configs/ppo_go1_3leg.yaml` to visualize the Go1 dog-like robot instead of the Ant. The viewer needs a display (on headless machines use `--no-render` or `--record` with a virtual display if needed).
 
 ---
 
