@@ -4,7 +4,7 @@
 
 # BARK — Bionic Artificial Robotic Kinetics
 
-**BARK** is a research project aimed at predicting dog movement so that prosthetic legs can be driven without neurosurgery. The idea: if we can learn how one leg moves in relation to the other three, we can use that to control a robotic replacement for a missing or impaired leg, using only sensors on the healthy legs—no brain implants or invasive interfaces.
+**BARK** is a research project aimed at predicting dog movement so that prosthetic legs can be driven **without neurosurgery**. The idea: if we can learn how one leg moves in relation to the other three, we can use that to control a robotic replacement for a missing or impaired leg, using only sensors on the healthy legs—no brain implants or invasive interfaces.
 
 A core part of the stack is **real-world data**. We collect movement from healthy dogs using a sensor jacket: a harness with IMUs (inertial measurement units) on the back and wires down to wraps on each leg. The dog walks and runs normally while we log acceleration, angular velocity, and orientation at tens to hundreds of Hz. That data is used to build reference motions, to shape rewards in simulation, and to bridge the gap between sim and real (e.g. via domain randomization and calibration). The photo below shows the jacket in use on a Labrador.
 
@@ -12,16 +12,133 @@ A core part of the stack is **real-world data**. We collect movement from health
 
 ---
 
-## What’s in the repo: full stack
+## Contents
 
-The project combines several research directions into one pipeline:
+- [Pipeline overview](#pipeline-overview)
+- [The 3-leg → 4th-leg idea](#the-3-leg--4th-leg-idea)
+- [What's in the repo](#whats-in-the-repo)
+- [Setup](#setup)
+- [Quick start](#quick-start)
+- [Run 3D visualization](#run-3d-visualization)
+- [Imitation and AMP](#imitation-and-adversarial-motion-priors-amp)
+- [Jacket data and sim-to-real](#jacket-data-and-sim-to-real)
+- [License](#license)
 
-- **Reinforcement learning (RL)** — An agent in simulation learns to move a quadruped forward and stay healthy. The twist: the observation space hides the fourth leg’s state, so the policy must *infer* how that leg should move from the other three. That mimics the prosthetic setting: we only “see” the healthy legs and must predict the missing one.
-- **Imitation learning (IL)** — We can pre-train or shape behavior using expert data (e.g. from the jacket or from scripted gaits). Behavioural cloning (BC) and optional Adversarial Motion Priors (AMP) let the policy imitate reference motion while still optimising for task rewards.
-- **Simulation and 3D viz** — MuJoCo (via Gymnasium) provides the physics. You can use either a **generic Ant** (quick to run, 8 joints) or a **dog-like Unitree Go1** (12 joints, realistic shape and gait). Training runs headless; a separate script lets you spawn the robot in a 3D window and watch it walk or run, with or without a trained policy.
-- **Sim-to-real** — Jacket CSV data is loaded, converted to reference trajectories, and used for reward shaping or IL. Domain randomization (e.g. observation noise) and calibration docs help narrow the sim-to-real gap when moving toward real hardware.
+---
 
-So in one place you get: **real measurements (jacket)** → **reference trajectories and rewards** → **RL/IL training in MuJoCo** → **3D visualization and (future) deployment**.
+## Pipeline overview
+
+End-to-end flow from real dog data to trained policies and 3D visualization:
+
+```mermaid
+flowchart LR
+  subgraph real [Real world]
+    Jacket[IMU jacket]
+    CSV[Jacket CSV]
+  end
+  subgraph prep [Data prep]
+    Refs[Reference trajectories]
+  end
+  subgraph sim [Simulation]
+    Env[MuJoCo env]
+    Policy[RL or IL policy]
+  end
+  subgraph out [Output]
+    Viz[3D viz]
+    Deploy[Future deployment]
+  end
+  Jacket --> CSV
+  CSV --> Refs
+  Refs --> Env
+  Env --> Policy
+  Policy --> Viz
+  Policy --> Deploy
+```
+
+- **Real world**: Dog wears the jacket; we log IMU data to CSV.
+- **Data prep**: CSV is converted to reference trajectories (`.npy`) for reward shaping or imitation.
+- **Simulation**: MuJoCo env (Ant or Go1) with 3-leg observation; the policy learns to drive all four legs.
+- **Output**: 3D viewer to watch the robot walk/run; later, export for real hardware.
+
+---
+
+## The 3-leg → 4th-leg idea
+
+In simulation we **hide** the fourth leg’s state from the agent. The policy only sees the torso and legs 0–2; it must **infer** how leg 3 (the “prosthetic”) should move and output commands for all four legs. That mirrors the real setting: we only have sensors on the healthy legs and must predict the missing one.
+
+```mermaid
+flowchart LR
+  subgraph obs [Observation]
+    Torso[Torso]
+    Leg0[Leg 0]
+    Leg1[Leg 1]
+    Leg2[Leg 2]
+  end
+  subgraph hidden [Hidden]
+    Leg3[Leg 3]
+  end
+  subgraph policy [Policy]
+    NN[Neural network]
+  end
+  subgraph action [Action]
+    A0[Leg 0 cmd]
+    A1[Leg 1 cmd]
+    A2[Leg 2 cmd]
+    A3[Leg 3 cmd]
+  end
+  Torso --> NN
+  Leg0 --> NN
+  Leg1 --> NN
+  Leg2 --> NN
+  NN --> A0
+  NN --> A1
+  NN --> A2
+  NN --> A3
+  Leg3 -.->|"no obs"| NN
+```
+
+| Robot   | Obs dim | Action dim | Leg 3 in obs? |
+|--------|---------|------------|----------------|
+| **Ant** (generic) | 23      | 8          | No (masked)    |
+| **Go1** (dog-like) | 31    | 12         | No (masked)    |
+
+---
+
+## What's in the repo
+
+High-level layout:
+
+```mermaid
+flowchart TB
+  subgraph code [Code]
+    envs[envs]
+    train[train]
+    data[data]
+    scripts[scripts]
+  end
+  subgraph config [Config]
+    configs[configs]
+  end
+  subgraph assets [Assets and docs]
+    assets_dir[assets]
+    docs[docs]
+  end
+  envs --> configs
+  train --> configs
+  data --> scripts
+  train --> envs
+  assets_dir --> envs
+```
+
+| Folder     | Role |
+|-----------|------|
+| **envs/** | **BarkAnt3Leg**: generic Ant (8 joints, 23-dim obs, 8D action). **BarkGo1_3Leg**: dog-like Unitree Go1 (12 joints, 31-dim obs, 12D action). Both mask leg 3 so the policy predicts the prosthetic leg from the other three. |
+| **train/** | RL (PPO/SAC) and IL (BC) training, AMP discriminator, callbacks for TensorBoard and per-leg metrics. |
+| **data/** | Jacket CSV loaders and reference trajectory conversion (`.npy`) for reward shaping or IL. |
+| **configs/** | YAML configs for env, PPO/SAC, BC, AMP (Ant and Go1). |
+| **scripts/** | `jacket_to_reference.py`, `visualize_training.py`, `run_dog_viz.py` (3D viewer), `get_go1_model.py` (download Go1 assets). |
+| **assets/** | Optional: `unitree_go1/` (scene, model, meshes) after running `get_go1_model.py`. |
+| **docs/** | Sim-to-real and jacket calibration ([SIM_TO_REAL.md](docs/SIM_TO_REAL.md)). |
 
 ---
 
@@ -39,86 +156,69 @@ Main dependencies: `gymnasium[mujoco]`, `mujoco`, `stable-baselines3`, `imitatio
 
 ---
 
-## Project layout
-
-| Folder     | Role |
-|-----------|------|
-| **envs/** | Gymnasium environments. **BarkAnt3Leg**: generic Ant quadruped (8 joints, 23-dim obs, 8D action). **BarkGo1_3Leg**: dog-like Unitree Go1 (12 joints, 31-dim obs, 12D action). Both mask leg 3 from the observation so the policy predicts the prosthetic leg from the other three. |
-| **train/** | RL (PPO/SAC) and IL (BC) training scripts, AMP discriminator training, callbacks for TensorBoard and per-leg metrics. |
-| **data/** | Jacket CSV loaders and utilities to build reference trajectories (`.npy`) for reward shaping or IL. |
-| **configs/** | YAML configs for env, PPO/SAC, BC, and AMP (Ant and Go1). |
-| **scripts/** | `jacket_to_reference.py` (CSV → reference), `visualize_training.py` (reward and per-leg plots), `run_dog_viz.py` (3D sim viewer), `get_go1_model.py` (download Go1 assets). |
-| **assets/** | Optional: `unitree_go1/` (scene.xml, go1.xml, meshes) after running `get_go1_model.py`. |
-| **docs/** | Sim-to-real and jacket calibration ([SIM_TO_REAL.md](docs/SIM_TO_REAL.md)). |
-
----
-
-## Quick start: train and evaluate
+## Quick start
 
 **Option A — Generic Ant (no extra setup)**  
-Train a PPO policy on the 3-leg→4th-leg Ant env (from repo root; on Windows PowerShell use `$env:PYTHONPATH=".";` instead of `PYTHONPATH=.`):
+
+From repo root (on Windows you can omit `PYTHONPATH=.` when using `python -m` from the repo):
 
 ```bash
 PYTHONPATH=. python -m train.train_rl --config configs/ppo_ant_3leg.yaml
 ```
 
 **Option B — Dog-like Unitree Go1**  
-The Go1 is a more realistic dog-shaped quadruped. First, download the model (run once):
+
+Download the Go1 model once, then train:
 
 ```bash
-PYTHONPATH=. python scripts/get_go1_model.py
-```
-
-Then train with the Go1 config:
-
-```bash
+python scripts/get_go1_model.py
 PYTHONPATH=. python -m train.train_rl --config configs/ppo_go1_3leg.yaml
 ```
 
-Training logs to TensorBoard by default (`logs/tensorboard`). A custom callback logs **per-leg action statistics**: you can check whether the prosthetic leg (leg 3) learns to behave like the observed legs (0–2). After training, plot reward curves and per-leg metrics:
+Training logs to TensorBoard (`logs/tensorboard`). A custom callback logs **per-leg action statistics**. After training, plot reward and per-leg metrics:
 
 ```bash
 PYTHONPATH=. python scripts/visualize_training.py --logdir logs/tensorboard --out logs/figures
 ```
 
-**Performance and what to look for:**  
-- **Reward**: Episode reward and length in `logs/figures/training_reward.png`. A policy that moves forward and stays up gets higher reward and longer episodes.  
-- **Per-leg actions**: `logs/figures/per_leg_actions.png` shows mean action magnitude per leg and the **leg3 / others ratio**. A ratio close to 1 means the prosthetic leg is acting in line with the other legs; far from 1 suggests the policy still treats leg 3 differently.
+**What to look for**
 
-Optional: W&B (`--wandb`) or Comet (`--comet`) for experiment tracking and video.
+| Metric | Where | Interpretation |
+|--------|--------|----------------|
+| **Reward / episode length** | `logs/figures/training_reward.png` | Higher reward and longer episodes = policy moves forward and stays up. |
+| **Leg3 vs others action ratio** | `logs/figures/per_leg_actions.png` | Ratio near 1 = prosthetic leg behaves like the other legs. |
+
+Optional: `--wandb` or `--comet` for experiment tracking and video.
 
 ---
 
 ## Run 3D visualization
 
-Spawn the quadruped in MuJoCo and watch it in a 3D window:
-
-**Bash (Linux/macOS):**
-```bash
-PYTHONPATH=. python scripts/run_dog_viz.py
-```
-
-**PowerShell (Windows):**
-```powershell
-$env:PYTHONPATH="."; python scripts/run_dog_viz.py
-```
-
-By default this runs a few episodes with **random actions** so you can confirm the sim and window work. After training, drive it with a saved policy:
+Spawn the quadruped in MuJoCo and watch it in a 3D window. From repo root, **no PYTHONPATH needed** for this script:
 
 ```bash
-PYTHONPATH=. python scripts/run_dog_viz.py --model models/best.zip --episodes 10
-```
-```powershell
-$env:PYTHONPATH="."; python scripts/run_dog_viz.py --model models/best.zip --episodes 10
+python scripts/run_dog_viz.py
 ```
 
-Options: `--config`, `--seed`, `--no-render` (headless), `--record` (save video to `--video-folder`). Use `--config configs/ppo_go1_3leg.yaml` to visualize the Go1 dog-like robot instead of the Ant. The viewer needs a display (on headless machines use `--no-render` or `--record` with a virtual display if needed).
+**Go1 (dog-like) instead of Ant:**
+
+```bash
+python scripts/run_dog_viz.py --config configs/ppo_go1_3leg.yaml
+```
+
+**With a trained policy:**
+
+```bash
+python scripts/run_dog_viz.py --model models/best.zip --episodes 10
+```
+
+**Options:** `--config`, `--seed`, `--no-render` (headless), `--record` (save video to `--video-folder`). The viewer needs a display; on headless machines use `--no-render` or `--record` with a virtual display if needed.
 
 ---
 
 ## Imitation and Adversarial Motion Priors (AMP)
 
-You can pre-train or regularise the policy with expert data:
+Pre-train or regularise the policy with expert data:
 
 1. **Collect demos** (e.g. from a random or scripted policy):  
    `python -m train.train_il --config configs/bc_ant_3leg.yaml --collect_demos 50`  
@@ -126,7 +226,7 @@ You can pre-train or regularise the policy with expert data:
 
 2. **Train with AMP**:  
    `python -m train.train_rl --config configs/ppo_ant_3leg_amp.yaml`  
-   Set `amp.expert_path` in the config to your `.npz`. The discriminator learns to distinguish expert vs policy transitions; the policy gets a style reward for matching expert motion. Tune `amp.style_weight` to balance task reward and style.
+   Set `amp.expert_path` in the config to your `.npz`. The discriminator learns to tell expert vs policy transitions apart; the policy gets a style reward for matching expert motion. Tune `amp.style_weight` to balance task reward and style.
 
 BC-only (no AMP): use `train_il.py` with `--expert_path` pointing at your demos.
 
