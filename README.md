@@ -4,131 +4,127 @@
 
 # BARK — Bionic Artificial Robotic Kinetics
 
-![BARK](dog_gemini.png)
+**BARK** is a research project aimed at predicting dog movement so that prosthetic legs can be driven without neurosurgery. The idea: if we can learn how one leg moves in relation to the other three, we can use that to control a robotic replacement for a missing or impaired leg, using only sensors on the healthy legs—no brain implants or invasive interfaces.
 
-RL/IL training pipeline to learn how one dog leg depends on the other three, for prosthetic leg prediction. Uses MuJoCo + Gymnasium for simulation, Stable-Baselines3 for RL, and W&B (or Comet) for training visualization. Jacket (IMU vest) data supports sim-to-real alignment.
+A core part of the stack is **real-world data**. We collect movement from healthy dogs using a sensor jacket: a harness with IMUs (inertial measurement units) on the back and wires down to wraps on each leg. The dog walks and runs normally while we log acceleration, angular velocity, and orientation at tens to hundreds of Hz. That data is used to build reference motions, to shape rewards in simulation, and to bridge the gap between sim and real (e.g. via domain randomization and calibration). The photo below shows the jacket in use on a Labrador.
+
+![Dog wearing the sensor jacket (harness with IMU box and leg sensors)](docs/dog_jacket_setup.png)
+
+---
+
+## What’s in the repo: full stack
+
+The project combines several research directions into one pipeline:
+
+- **Reinforcement learning (RL)** — An agent in simulation learns to move a quadruped (Ant) forward and stay healthy. The twist: the observation space hides the fourth leg’s state, so the policy must *infer* how that leg should move from the other three. That mimics the prosthetic setting: we only “see” the healthy legs and must predict the missing one.
+- **Imitation learning (IL)** — We can pre-train or shape behavior using expert data (e.g. from the jacket or from scripted gaits). Behavioural cloning (BC) and optional Adversarial Motion Priors (AMP) let the policy imitate reference motion while still optimising for task rewards.
+- **Simulation and 3D viz** — MuJoCo (via Gymnasium) provides the physics and the quadruped model. Training runs headless; a separate script lets you spawn the dog in a 3D window and watch it walk or run, with or without a trained policy.
+- **Sim-to-real** — Jacket CSV data is loaded, converted to reference trajectories, and used for reward shaping or IL. Domain randomization (e.g. observation noise) and calibration docs help narrow the sim-to-real gap when moving toward real hardware.
+
+So in one place you get: **real measurements (jacket)** → **reference trajectories and rewards** → **RL/IL training in MuJoCo** → **3D visualization and (future) deployment**.
+
+---
 
 ## Setup
 
+From the repo root:
+
 ```bash
-cd bark
 python -m venv .venv
-source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+# Windows: .venv\Scripts\activate   |   Linux/macOS: source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Structure
+Main dependencies: `gymnasium[mujoco]`, `mujoco`, `stable-baselines3`, `imitation`, and optional `wandb` / `comet-ml` for logging.
 
-- **`envs/`** — Custom Gymnasium envs: 3-leg observation → 4th-leg (or full-body) action.
-- **`train/`** — RL (PPO/SAC) and IL training scripts with W&B/Comet logging.
-- **`data/`** — Jacket CSV loaders and reference trajectory conversion.
-- **`configs/`** — Env names, rewards, hyperparameters, logging.
-- **`scripts/`** — Data generation, jacket CSV → reference trajectories.
+---
 
-## Quick start
+## Project layout
 
-Train a PPO policy on the Ant-based “3 legs → 4th leg” env:
+| Folder     | Role |
+|-----------|------|
+| **envs/** | Gymnasium environments. The main one is **BarkAnt3Leg**: Ant quadruped with observation masked to torso + legs 0–2 (23 dims); action is full 8D so the policy must drive the “prosthetic” leg (leg 3) from the other three. |
+| **train/** | RL (PPO/SAC) and IL (BC) training scripts, AMP discriminator training, callbacks for TensorBoard and per-leg metrics. |
+| **data/** | Jacket CSV loaders and utilities to build reference trajectories (`.npy`) for reward shaping or IL. |
+| **configs/** | YAML configs for env, PPO/SAC, BC, and AMP. |
+| **scripts/** | `jacket_to_reference.py` (CSV → reference), `visualize_training.py` (reward and per-leg plots), `run_dog_viz.py` (3D sim viewer). |
+| **docs/** | Sim-to-real and jacket calibration ([SIM_TO_REAL.md](docs/SIM_TO_REAL.md)). |
+
+---
+
+## Quick start: train and evaluate
+
+Train a PPO policy on the 3-leg→4th-leg Ant env (from repo root; on Windows PowerShell use `$env:PYTHONPATH=".";` instead of `PYTHONPATH=.`):
 
 ```bash
-python -m train.train_rl --config configs/ppo_ant_3leg.yaml
+PYTHONPATH=. python -m train.train_rl --config configs/ppo_ant_3leg.yaml
 ```
 
-With Weights & Biases (set `WANDB_API_KEY` or run `wandb login`):
+Training logs to TensorBoard by default (`logs/tensorboard`). A custom callback logs **per-leg action statistics**: you can check whether the prosthetic leg (leg 3) learns to behave like the observed legs (0–2). After training, plot reward curves and per-leg metrics:
 
 ```bash
-python -m train.train_rl --config configs/ppo_ant_3leg.yaml --wandb
-```
-
-With Comet ML (set `COMET_API_KEY`):
-
-```bash
-python -m train.train_rl --config configs/ppo_ant_3leg.yaml --comet
-```
-
-Both log training curves (episode reward, loss, etc.). W&B also supports video logging via its SB3 integration.
-
-**TensorBoard and per-leg metrics**  
-Training logs to TensorBoard by default (`logs/tensorboard`). A custom callback records **per-leg action statistics** so you can check whether the prosthetic leg (leg 3) learns to behave like the observed legs (0–2):
-
-```bash
-# Train (TensorBoard logs + per-leg metrics)
-PYTHONPATH=. python -m train.train_rl --config configs/ppo_ant_3leg.yaml --tb_dir logs/tensorboard
-
-# Optional: override timesteps for a quick run
-PYTHONPATH=. python -m train.train_rl --config configs/ppo_ant_3leg.yaml --timesteps 100000
-
-# Plot reward curves and per-leg action magnitude (does leg 3 train like the others?)
 PYTHONPATH=. python scripts/visualize_training.py --logdir logs/tensorboard --out logs/figures
-
-# Compare multiple runs (e.g. different seeds)
-PYTHONPATH=. python scripts/visualize_training.py --logdir logs/tensorboard --all-runs --out logs/figures
 ```
 
-Figures are saved under `logs/figures/`: `training_reward.png` (reward and episode length) and `per_leg_actions.png` (mean |action| per leg and leg3/others ratio; ratio near 1 means the prosthetic leg is acting like the observed legs).
+**Performance and what to look for:**  
+- **Reward**: Episode reward and length in `logs/figures/training_reward.png`. A policy that moves forward and stays up gets higher reward and longer episodes.  
+- **Per-leg actions**: `logs/figures/per_leg_actions.png` shows mean action magnitude per leg and the **leg3 / others ratio**. A ratio close to 1 means the prosthetic leg is acting in line with the other legs; far from 1 suggests the policy still treats leg 3 differently.
 
-## Adversarial Motion Priors (AMP)
+Optional: W&B (`--wandb`) or Comet (`--comet`) for experiment tracking and video.
 
-AMP rewards the policy for producing state transitions (s, s') that look like reference (expert) motion. A discriminator is trained to tell expert vs policy transitions; the policy gets a style reward for fooling it.
+---
 
-1. **Collect expert rollouts** (same format as IL):  
+## Run 3D visualization
+
+Spawn the quadruped in MuJoCo and watch it in a 3D window:
+
+**Bash (Linux/macOS):**
+```bash
+PYTHONPATH=. python scripts/run_dog_viz.py
+```
+
+**PowerShell (Windows):**
+```powershell
+$env:PYTHONPATH="."; python scripts/run_dog_viz.py
+```
+
+By default this runs a few episodes with **random actions** so you can confirm the sim and window work. After training, drive it with a saved policy:
+
+```bash
+PYTHONPATH=. python scripts/run_dog_viz.py --model models/best.zip --episodes 10
+```
+```powershell
+$env:PYTHONPATH="."; python scripts/run_dog_viz.py --model models/best.zip --episodes 10
+```
+
+Options: `--config`, `--seed`, `--no-render` (headless), `--record` (save video to `--video-folder`). The robot is the same Ant used in training; the viewer needs a display (on headless machines use `--no-render` or `--record` with a virtual display if needed).
+
+---
+
+## Imitation and Adversarial Motion Priors (AMP)
+
+You can pre-train or regularise the policy with expert data:
+
+1. **Collect demos** (e.g. from a random or scripted policy):  
    `python -m train.train_il --config configs/bc_ant_3leg.yaml --collect_demos 50`  
-   This writes `demos/expert_rollouts.npz` (or set path via `--expert_path`).
+   Saves rollouts to `demos/expert_rollouts.npz` (or path set via `--expert_path`).
 
 2. **Train with AMP**:  
    `python -m train.train_rl --config configs/ppo_ant_3leg_amp.yaml`  
-   Set `amp.expert_path` in the config to your `.npz` path. Tune `amp.style_weight` to balance task reward vs style (e.g. `1.0`).
+   Set `amp.expert_path` in the config to your `.npz`. The discriminator learns to distinguish expert vs policy transitions; the policy gets a style reward for matching expert motion. Tune `amp.style_weight` to balance task reward and style.
 
-Config: `amp.enabled`, `amp.expert_path`, `amp.style_weight`, `amp.disc_lr`, `amp.disc_batch_size`, `amp.max_transitions`, etc.
+BC-only (no AMP): use `train_il.py` with `--expert_path` pointing at your demos.
 
-## Jacket data
+---
 
-Place jacket CSV files (IMU1–IMU3 as features, IMU4 as target) in `data/raw/` or set `data.jacket_csv` in config. Use `scripts/jacket_to_reference.py` to convert to reference trajectories for reward shaping or IL.
+## Jacket data and sim-to-real
 
-## Sim-to-real and jacket
-
-- **Jacket CSV**: Use `data/jacket_loader.py` and `scripts/jacket_to_reference.py` to load IMU data and build reference trajectories.
-- **Domain randomization**: In `configs/ppo_ant_3leg.yaml` set `env_kwargs: { obs_noise_std: 0.02 }` to add observation noise in simulation.
+- **CSV format**: Jacket data (IMU1–IMU3 as inputs, IMU4 as target or reference) goes in `data/raw/` or path set in config. Use `scripts/jacket_to_reference.py` to convert CSV to reference `.npy` for reward shaping or IL.
+- **Domain randomization**: In config set `env_kwargs: { obs_noise_std: 0.02 }` (or similar) to add observation noise in sim and improve robustness for real sensors.
 - **Calibration**: See [docs/SIM_TO_REAL.md](docs/SIM_TO_REAL.md) for jacket coordinate frame, units, and reference-matching rewards.
+
+---
 
 ## License
 
 MIT.
-Summary of what’s in place:
-
-## 1. **Repo bootstrap**
-- **Layout**: `envs/`, `train/`, `data/`, `configs/`, `scripts/`, `docs/`
-- **requirements.txt**: gymnasium[mujoco], mujoco, stable-baselines3, wandb, imitation, scipy, pyyaml
-- **pyproject.toml**: package config for `envs`, `train`, `data`
-- **README.md**: setup, usage, quick start
-
-## 2. **Custom env (BarkAnt3Leg)**
-- **`envs/bark_ant_3leg.py`**: Subclass of Gymnasium Ant; obs = torso + legs 0–2 only (23 dims), action = full 8D.
-- **Registration**: `BarkAnt3Leg-v0` registered on import.
-- **Sim-to-real**: Optional `obs_noise_std` in env `__init__` for observation noise.
-
-## 3. **RL training**
-- **`train/train_rl.py`**: PPO/SAC from YAML (e.g. `configs/ppo_ant_3leg.yaml`), EvalCallback, config path resolved from repo root.
-- **W&B**: `--wandb` uses `WandbCallback` from `wandb.integration.sb3` (or fallback custom callback).
-- **Comet**: `--comet` uses `train/callbacks.py` `CometLoggerCallback`.
-
-## 4. **Jacket data**
-- **`data/jacket_loader.py`**: `load_jacket_csv()` → (X, y) for IMU1–3 vs IMU4; `jacket_to_sequences()` for sliding windows.
-- **`data/reference_trajectory.py`**: `jacket_to_reference()` builds normalized reference arrays and can save `.npy`.
-- **`scripts/jacket_to_reference.py`**: CLI to turn jacket CSV into reference `.npy`.
-
-## 5. **IL (imitation)**
-- **`train/train_il.py`**: BC with `imitation.algorithms.bc`; `--collect_demos N` writes expert rollouts; `--expert_path` loads `.npz` and trains BC. Expert path resolved from repo root (and cwd fallback). `TrajectoryWithRew(..., terminal=True)`, `optimizer_kwargs=dict(lr=...)`, batch size capped by demo size.
-- **`configs/bc_ant_3leg.yaml`**: BC config.
-
-## 6. **Viz**
-- **W&B**: Used in `train_rl.py` via `--wandb` (metrics and optional model/video).
-- **Comet**: Used via `--comet` and `CometLoggerCallback`; README updated for both.
-
-## 7. **Sim-to-real**
-- **`docs/SIM_TO_REAL.md`**: Jacket coordinate frame, units, calibration; domain randomization; reference-matching reward.
-- **Env**: `obs_noise_std` in `BarkAnt3LegEnv` and in `configs/env_ant_3leg.yaml`.
-- **README**: Link to SIM_TO_REAL and note on `env_kwargs.obs_noise_std`.
-
-**How to run**
-- From repo root: `PYTHONPATH=. python -m train.train_rl --config configs/ppo_ant_3leg.yaml` (add `--wandb` or `--comet` as needed).
-- IL: `PYTHONPATH=. python -m train.train_il --config configs/bc_ant_3leg.yaml --expert_path demos/expert_rollouts.npz` (create demos first with `--collect_demos 30`).
