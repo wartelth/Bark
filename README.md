@@ -82,13 +82,13 @@ In this setup:
 
 - the **teacher** controls legs `0-2`
 - the **student** controls only the missing rear-left leg (`leg 3`)
-- the student receives a masked `39`-D observation
+- the student receives a `39`-D observation formed by removing the `9` leg-3 channels from the full `48`-D Go1 observation
 - the student predicts only `3` joint commands for the prosthetic leg
 
 Three student paths are supported:
 
-- **Supervised / behavior cloning**: direct regression from masked observation to teacher leg-3 action
-- **Explicit imitation learning**: BC initialization plus DAgger-style aggregation on student-induced states
+- **Supervised / behavior cloning**: direct regression from the reduced `39`-D observation to the teacher leg-3 action
+- **Explicit imitation learning**: the same supervised objective as BC, but with DAgger-style data aggregation on student-induced states
 - **RL / PPO**: hybrid control with teacher tracking in the reward
 
 The current shared scenario library supports:
@@ -110,24 +110,19 @@ Main artifacts live under:
 
 ## The 3-leg → 4th-leg idea
 
-In the current prosthetic Go1 setup we **hide** the fourth leg's state from the student. The student only sees the torso and legs `0-2`; it must **infer** how leg `3` (the prosthetic leg) should move. The teacher still provides the other three legs, and Bark merges the student prosthetic action back into the full action before stepping the Go1 environment.
+In the current prosthetic Go1 setup, the student does not get the prosthetic leg's own proprioceptive/history channels. Concretely, Bark starts from the full `48`-D Go1 observation and removes the `9` leg-3 entries for joint position, joint velocity, and previous action, leaving a `39`-D student input. The teacher still provides the other three legs, and Bark merges the student prosthetic action back into the full action before stepping the Go1 environment.
 
 ```mermaid
 flowchart LR
-  subgraph obs [Observation]
-    Torso[Torso]
-    Leg0[Leg 0]
-    Leg1[Leg 1]
-    Leg2[Leg 2]
-  end
-  subgraph hidden [Masked]
-    Leg3Obs[Leg 3 state]
-  end
+  FullObs[Full Go1 obs 48D]
+  Keep[Keep torso command and legs 0-2 channels]
+  Drop[Drop leg-3 pos vel last_action 9D]
+  StudentObs[Student obs 39D]
   subgraph teacher [Teacher]
-    T012[Teacher legs 0-2]
+    T012[Teacher outputs legs 0-2]
   end
   subgraph student [Student]
-    NN[Student network]
+    NN[Student head BC or DAgger]
   end
   subgraph merge [Hybrid action]
     A0[Leg 0 cmd]
@@ -135,15 +130,15 @@ flowchart LR
     A2[Leg 2 cmd]
     A3[Leg 3 cmd]
   end
-  Torso --> NN
-  Leg0 --> NN
-  Leg1 --> NN
-  Leg2 --> NN
+  FullObs --> Keep
+  FullObs --> Drop
+  Keep --> StudentObs
+  Drop -. removed .-> StudentObs
+  StudentObs --> NN
   T012 --> A0
   T012 --> A1
   T012 --> A2
   NN --> A3
-  Leg3Obs -.->|"masked"| NN
 ```
 
 | Stack | Student obs dim | Student action dim | Teacher action usage |
