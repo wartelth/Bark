@@ -30,37 +30,47 @@ A core part of the stack is **real-world data**. We collect movement from health
 
 ## Pipeline overview
 
-End-to-end flow from real dog data to trained policies and 3D visualization:
+End-to-end flow for the current prosthetic Go1 stack:
 
 ```mermaid
 flowchart LR
-  subgraph real [Real world]
-    Jacket[IMU jacket]
-    CSV[Jacket CSV]
+  subgraph teacher [Teacher side]
+    ExtTeacher[External Go1 teacher]
+    Go1Env[Go1 MuJoCo env]
   end
-  subgraph prep [Data prep]
-    Refs[Reference trajectories]
+  subgraph data [Data generation]
+    Rollouts[teacher_rollouts.npz]
+    Scenarios[scenario library<br/>speed turn slope]
   end
-  subgraph sim [Simulation]
-    Env[MuJoCo env]
-    Policy[RL or IL policy]
+  subgraph train [Student training]
+    BC[Supervised / BC]
+    IL[IL / DAgger]
+    PPO[RL / PPO]
   end
   subgraph out [Output]
-    Viz[3D viz]
-    Deploy[Future deployment]
+    Compare[scenario-aware evaluation]
+    Videos[comparison videos]
+    Report[markdown + PDF]
   end
-  Jacket --> CSV
-  CSV --> Refs
-  Refs --> Env
-  Env --> Policy
-  Policy --> Viz
-  Policy --> Deploy
+  ExtTeacher --> Go1Env
+  Go1Env --> Rollouts
+  Scenarios --> Rollouts
+  Rollouts --> BC
+  Rollouts --> IL
+  Rollouts --> PPO
+  Scenarios --> IL
+  Scenarios --> PPO
+  BC --> Compare
+  IL --> Compare
+  PPO --> Compare
+  Compare --> Videos
+  Compare --> Report
 ```
 
-- **Real world**: Dog wears the jacket; we log IMU data to CSV.
-- **Data prep**: CSV is converted to reference trajectories (`.npy`) for reward shaping or imitation.
-- **Simulation**: MuJoCo env (Ant or Go1) with 3-leg observation; the policy learns to drive all four legs.
-- **Output**: 3D viewer to watch the robot walk/run; later, export for real hardware.
+- **Teacher side**: a working external Go1 teacher runs in the full MuJoCo environment.
+- **Data generation**: teacher rollouts are collected across speed, turn, and slope scenarios.
+- **Student training**: the saved dataset feeds the supervised baseline, explicit IL / DAgger, and PPO prosthetic RL.
+- **Output**: evaluation plots, comparison videos, and interview-ready markdown / PDF reports.
 
 ---
 
@@ -100,7 +110,7 @@ Main artifacts live under:
 
 ## The 3-leg → 4th-leg idea
 
-In simulation we **hide** the fourth leg’s state from the agent. The policy only sees the torso and legs 0–2; it must **infer** how leg 3 (the “prosthetic”) should move and output commands for all four legs. That mirrors the real setting: we only have sensors on the healthy legs and must predict the missing one.
+In the current prosthetic Go1 setup we **hide** the fourth leg's state from the student. The student only sees the torso and legs `0-2`; it must **infer** how leg `3` (the prosthetic leg) should move. The teacher still provides the other three legs, and Bark merges the student prosthetic action back into the full action before stepping the Go1 environment.
 
 ```mermaid
 flowchart LR
@@ -110,13 +120,16 @@ flowchart LR
     Leg1[Leg 1]
     Leg2[Leg 2]
   end
-  subgraph hidden [Hidden]
-    Leg3[Leg 3]
+  subgraph hidden [Masked]
+    Leg3Obs[Leg 3 state]
   end
-  subgraph policy [Policy]
-    NN[Neural network]
+  subgraph teacher [Teacher]
+    T012[Teacher legs 0-2]
   end
-  subgraph action [Action]
+  subgraph student [Student]
+    NN[Student network]
+  end
+  subgraph merge [Hybrid action]
     A0[Leg 0 cmd]
     A1[Leg 1 cmd]
     A2[Leg 2 cmd]
@@ -126,17 +139,17 @@ flowchart LR
   Leg0 --> NN
   Leg1 --> NN
   Leg2 --> NN
-  NN --> A0
-  NN --> A1
-  NN --> A2
+  T012 --> A0
+  T012 --> A1
+  T012 --> A2
   NN --> A3
-  Leg3 -.->|"no obs"| NN
+  Leg3Obs -.->|"masked"| NN
 ```
 
-| Robot   | Obs dim | Action dim | Leg 3 in obs? |
-|--------|---------|------------|----------------|
-| **Ant** (generic) | 23      | 8          | No (masked)    |
-| **Go1** (dog-like) | 31    | 12         | No (masked)    |
+| Stack | Student obs dim | Student action dim | Teacher action usage |
+|--------|----------------:|-------------------:|----------------------|
+| **Ant** (generic legacy) | 23 | 8 | student predicts full action |
+| **Go1** (prosthetic stack) | 39 | 3 | teacher provides legs `0-2`, student predicts only leg `3` |
 
 ---
 
@@ -150,31 +163,42 @@ flowchart TB
     envs[envs]
     train[train]
     data[data]
-    scripts[scripts]
+    evaluate[evaluate]
+    postpro[postpro]
+    pretrained[pretrained]
+    ext[external_teachers]
   end
   subgraph config [Config]
     configs[configs]
   end
   subgraph assets [Assets and docs]
-    assets_dir[assets]
+    diagrams[diagrams]
+    reports[reports]
     docs[docs]
   end
   envs --> configs
   train --> configs
-  data --> scripts
+  train --> data
   train --> envs
-  assets_dir --> envs
+  train --> pretrained
+  evaluate --> reports
+  postpro --> reports
+  diagrams --> docs
 ```
 
 | Folder     | Role |
 |-----------|------|
-| **envs/** | **BarkAnt3Leg**: generic Ant (8 joints, 23-dim obs, 8D action). **BarkGo1_3Leg**: dog-like Unitree Go1 (12 joints, 31-dim obs, 12D action). Both mask leg 3 so the policy predicts the prosthetic leg from the other three. |
-| **train/** | RL (PPO/SAC) and IL (BC) training, AMP discriminator, callbacks for TensorBoard and per-leg metrics. |
-| **data/** | Jacket CSV loaders and reference trajectory conversion (`.npy`) for reward shaping or IL. |
-| **configs/** | YAML configs for env, PPO/SAC, BC, AMP (Ant and Go1). |
-| **scripts/** | `jacket_to_reference.py`, `visualize_training.py`, `run_dog_viz.py` (3D viewer), `get_go1_model.py` (download Go1 assets). |
-| **assets/** | Optional: `unitree_go1/` (scene, model, meshes) after running `get_go1_model.py`. |
-| **docs/** | Sim-to-real and jacket calibration ([SIM_TO_REAL.md](docs/SIM_TO_REAL.md)). |
+| **envs/** | Prosthetic hybrid env plus the shared scenario library for speed / turn / slope variation. |
+| **train/** | Teacher rollout generation, supervised BC, explicit IL / DAgger, PPO prosthetic RL, and full experiment orchestration. |
+| **data/** | Generated teacher rollouts and reference data. |
+| **configs/** | YAML configs for supervised, IL, PPO, and legacy Ant / Go1 experiments. |
+| **evaluate/** | Teacher vs supervised vs IL vs RL quantitative comparison. |
+| **postpro/** | Rendering, report generation, cross-run analysis, and markdown-to-PDF export. |
+| **pretrained/** | Teacher loading and local pretrained-model integration. |
+| **external_teachers/** | Adapter layer for external teacher repos such as the working Go1 policy. |
+| **diagrams/** | Mermaid sources and exported figures used in the interview material. |
+| **reports/** | Interview markdown, PDF, plots, and rendered comparison videos. |
+| **docs/** | Sim-to-real notes and student pipeline documentation. |
 
 ---
 
