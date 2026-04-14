@@ -1,0 +1,31 @@
+# RL prosthetic student: PPO training for leg-3-only control
+# Teacher controls legs 0-2 (frozen), student learns leg 3 (3D action)
+# Default teacher is the proven walking Go1 policy from D:\quadruped-rl-locomotion
+
+teacher_model_path: D:\quadruped-rl-locomotion\models\2024-04-27_18-04-12=1_pos_ctrl_20mil_iter_walking_with_fast_steps\best_model.zip
+total_timesteps: 500000
+obs_noise_std: 0.01
+scenario_pool: all_train
+eval_scenario_pool: all_train
+mass_rand_pct: 0.10
+friction_rand_pct: 0.20
+
+# PPO hyperparameters
+learning_rate: 0.0003
+n_steps: 1024
+batch_size: 256
+n_epochs: 10
+gamma: 0.99
+gae_lambda: 0.95
+clip_range: 0.2
+ent_coef: 0.01
+n_envs: 4
+
+# Reward weights in ProstheticGo1Env
+reward_tracking_weight: 2.0
+reward_forward_weight: 0.75
+reward_alive_weight: 0.0
+
+# Evaluation
+eval_freq: 10000
+n_eval_episodes: 10

@@ -1,0 +1,24 @@
+graph TB
+    subgraph teacher["Teacher Policy (frozen)"]
+        TI["Full obs<br/><b>37D</b>"] --> TN["MLP [512, 256, 128]<br/><i>PPO Actor</i>"]
+        TN --> TO["Full action<br/><b>12D</b>"]
+        TO --> TL0["Leg 0: FR<br/>hip, thigh, calf"]
+        TO --> TL1["Leg 1: FL<br/>hip, thigh, calf"]
+        TO --> TL2["Leg 2: RR<br/>hip, thigh, calf"]
+        TO --> TL3["Leg 3: RL<br/>hip, thigh, calf"]
+    end
+
+    subgraph student["Student Network"]
+        SI["3-leg obs<br/><b>31D</b>"] --> SN["MLP [256, 256, 128]<br/><i>107K parameters</i>"]
+        SN --> SO["Leg 3 action<br/><b>3D</b>"]
+    end
+
+    TL3 -.->|"MSE loss<br/>supervised"| SO
+    TL0 & TL1 & TL2 -->|"executed<br/>directly"| MJ["MuJoCo<br/>Go1 Robot"]
+    SO -->|"replaces<br/>leg 3"| MJ
+
+    style teacher fill:#fef9e7,stroke:#f39c12
+    style student fill:#eaf2f8,stroke:#2980b9
+    style TL3 fill:#e74c3c,color:#fff
+    style SO fill:#3498db,color:#fff
+    style MJ fill:#2ecc71,color:#fff

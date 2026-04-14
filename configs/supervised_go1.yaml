@@ -1,0 +1,18 @@
+# Supervised prosthetic student: learn f(obs_3leg) -> action_leg3
+# Uses teacher rollout data from data/teacher_rollouts.npz
+
+data_path: data/teacher_rollouts.npz
+hidden: [256, 256, 128]
+lr: 0.0003
+batch_size: 2048
+epochs: 24
+num_workers: 4
+patience: 6
+scenario_pool: all_train
+
+# Data generation settings (for reference)
+teacher_model_path: D:\quadruped-rl-locomotion\models\2024-04-27_18-04-12=1_pos_ctrl_20mil_iter_walking_with_fast_steps\best_model.zip
+data_gen_steps: 1000000
+data_gen_noise: 0.01
+data_gen_mass_rand: 0.10
+data_gen_friction_rand: 0.20

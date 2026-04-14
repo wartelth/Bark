@@ -1,0 +1,18 @@
+graph LR
+    subgraph v1["BARK v1: Monolithic ❌"]
+        A1["RL Agent<br/><i>12D action</i>"] -->|"learns<br/>everything"| B1["Walk + Predict<br/>missing leg"]
+        B1 --> C1["500K steps<br/><b>not enough</b>"]
+        style A1 fill:#e74c3c,color:#fff
+        style C1 fill:#e74c3c,color:#fff
+    end
+
+    subgraph v2["BARK v2: Decomposed ✓"]
+        A2["Teacher Policy<br/><i>pre-trained, 2M steps</i>"] -->|"already<br/>walks"| B2["Full 4-leg<br/>locomotion"]
+        B2 -->|"generates<br/>millions of pairs"| C2["(3-leg obs,<br/>leg-3 action)"]
+        C2 --> D2["Student Network<br/><i>learns only<br/>missing leg</i>"]
+        style A2 fill:#2ecc71,color:#fff
+        style D2 fill:#3498db,color:#fff
+    end
+
+    style v1 fill:#fde8e8,stroke:#e74c3c
+    style v2 fill:#e8f8e8,stroke:#2ecc71

@@ -1,0 +1,35 @@
+graph LR
+    subgraph dog["Real Dog (3 legs + prosthetic)"]
+        I1["IMU × 3 paws<br/><i>accelerometer<br/>gyroscope</i>"]
+        I2["Body IMU<br/><i>torso orientation<br/>angular velocity</i>"]
+        I3["Joint encoders<br/><i>9 joints × pos + vel</i>"]
+    end
+
+    subgraph inference["Onboard Compute"]
+        N1["Preprocess<br/><i>build 31D obs</i>"]
+        N2["Student ONNX<br/><i>31D → 3D<br/>~0.1ms inference</i>"]
+        N3["PD Controller<br/><i>position → torque</i>"]
+    end
+
+    subgraph prosthetic["Prosthetic Leg"]
+        P1["Hip actuator"]
+        P2["Thigh actuator"]
+        P3["Calf actuator"]
+    end
+
+    I1 & I2 & I3 --> N1
+    N1 --> N2 --> N3
+    N3 --> P1 & P2 & P3
+
+    subgraph simtoreal["Sim-to-Real Bridge"]
+        SR1["Domain randomization<br/><i>mass, friction, noise</i>"]
+        SR2["Observation noise<br/><i>mimics IMU error</i>"]
+        SR3["Latency modeling<br/><i>sensor → action delay</i>"]
+    end
+
+    simtoreal -.->|"trained with"| N2
+
+    style dog fill:#fef9e7,stroke:#f39c12
+    style inference fill:#eaf2f8,stroke:#2980b9
+    style prosthetic fill:#e8f8f5,stroke:#1abc9c
+    style simtoreal fill:#f4ecf7,stroke:#8e44ad

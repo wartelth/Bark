@@ -15,10 +15,12 @@ A core part of the stack is **real-world data**. We collect movement from health
 ## Contents
 
 - [Pipeline overview](#pipeline-overview)
+- [Prosthetic Go1 stack](#prosthetic-go1-stack)
 - [The 3-leg → 4th-leg idea](#the-3-leg--4th-leg-idea)
 - [What's in the repo](#whats-in-the-repo)
 - [Setup](#setup)
 - [Quick start](#quick-start)
+- [Prosthetic Go1 quick start](#prosthetic-go1-quick-start)
 - [Run 3D visualization](#run-3d-visualization)
 - [Imitation and AMP](#imitation-and-adversarial-motion-priors-amp)
 - [Jacket data and sim-to-real](#jacket-data-and-sim-to-real)
@@ -59,6 +61,40 @@ flowchart LR
 - **Data prep**: CSV is converted to reference trajectories (`.npy`) for reward shaping or imitation.
 - **Simulation**: MuJoCo env (Ant or Go1) with 3-leg observation; the policy learns to drive all four legs.
 - **Output**: 3D viewer to watch the robot walk/run; later, export for real hardware.
+
+---
+
+## Prosthetic Go1 stack
+
+The repo now also contains a more interview-ready **teacher-student prosthetic Go1 pipeline** built around a working external Unitree Go1 teacher.
+
+In this setup:
+
+- the **teacher** controls legs `0-2`
+- the **student** controls only the missing rear-left leg (`leg 3`)
+- the student receives a masked `39`-D observation
+- the student predicts only `3` joint commands for the prosthetic leg
+
+Three student paths are supported:
+
+- **Supervised / behavior cloning**: direct regression from masked observation to teacher leg-3 action
+- **Explicit imitation learning**: BC initialization plus DAgger-style aggregation on student-induced states
+- **RL / PPO**: hybrid control with teacher tracking in the reward
+
+The current shared scenario library supports:
+
+- forward speed regimes: chill / slow / medium / fast / run
+- turning commands
+- command-conditioned lateral variants
+- real uphill / downhill cases by tilting the MuJoCo floor plane at runtime
+
+Main artifacts live under:
+
+- `train/`: data generation, supervised, IL, PPO, full experiment runner
+- `envs/`: prosthetic hybrid env and scenario library
+- `evaluate/`: teacher vs supervised vs IL vs RL comparison
+- `postpro/`: figures, videos, report generation, PDF export
+- `reports/`: interview markdown, plots, videos, PDF
 
 ---
 
@@ -189,6 +225,90 @@ PYTHONPATH=. python scripts/visualize_training.py --logdir logs/tensorboard --ou
 | **Leg3 vs others action ratio** | `logs/figures/per_leg_actions.png` | Ratio near 1 = prosthetic leg behaves like the other legs. |
 
 Optional: `--wandb` or `--comet` for experiment tracking and video.
+
+---
+
+## Prosthetic Go1 quick start
+
+If you want to run the prosthetic-teacher stack rather than the generic Ant/Go1 training paths above, use this flow from the repo root.
+
+### 1. Generate teacher rollouts
+
+```bash
+python train/generate_teacher_data.py --steps 1000000 --noise 0.01 --mass-rand 0.10 --friction-rand 0.20 --scenario-pool all_train
+```
+
+This writes:
+
+- `data/teacher_rollouts.npz`
+
+### 2. Train the supervised baseline
+
+```bash
+python train/train_supervised.py --config configs/supervised_go1.yaml --device cuda
+```
+
+This writes:
+
+- `models/supervised_prosthetic/`
+
+### 3. Train the explicit IL / DAgger student
+
+```bash
+python train/train_il.py --config configs/imitation_go1.yaml --device cuda
+```
+
+This writes:
+
+- `models/imitation_prosthetic/`
+
+### 4. Train the PPO prosthetic RL student
+
+```bash
+python train/train_prosthetic_rl.py --config configs/prosthetic_rl_go1.yaml --device cpu
+```
+
+Note: for SB3 PPO with an MLP policy, CPU plus parallel envs is usually more efficient than forcing GPU.
+
+This writes:
+
+- `models/prosthetic_rl/`
+
+### 5. Evaluate and render comparison assets
+
+```bash
+python evaluate/compare.py --episodes 24 --scenario-pool all_train
+python -m postpro.render_students --all-scenarios --steps 500 --fps 30
+python -m postpro.run_all
+python postpro/export_markdown_pdf.py --input reports/INTERVIEW_NEURA_PROSTHETIC_GO1.md --output reports/INTERVIEW_NEURA_PROSTHETIC_GO1.pdf
+```
+
+Key outputs:
+
+- `reports/student_comparison.png`
+- `reports/student_comparison_by_scenario.png`
+- `reports/leg3_tracking_error.png`
+- `reports/walk_sidebyside.mp4`
+- `reports/INTERVIEW_NEURA_PROSTHETIC_GO1.md`
+- `reports/INTERVIEW_NEURA_PROSTHETIC_GO1.pdf`
+
+### 6. One-command bounded experiment
+
+For a single orchestration entry point:
+
+```bash
+python train/run_full_experiment.py --rl-device cpu
+```
+
+That command chains:
+
+- large teacher-data generation
+- supervised retraining
+- IL / DAgger training
+- PPO RL training
+- comparison plots
+- rendered videos
+- post-processing reports
 
 ---
 

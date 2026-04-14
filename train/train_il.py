@@ -1,171 +1,272 @@
 """
-Imitation learning: BC or GAIL on BarkAnt3Leg using expert demos.
-Expert data can be from rollouts (e.g. a trained policy or scripted policy) or from
-jacket-derived reference (after mapping to env state space).
-Usage:
-  PYTHONPATH=. python -m train.train_il --config configs/bc_ant_3leg.yaml --expert_path demos/expert_rollouts.npz
+Train an explicit imitation-learning student with DAgger-style aggregation.
+
+The supervised trainer remains the pure behavior-cloning baseline.
+This script starts from teacher data, then repeatedly:
+  1. rolls the current student in the hybrid env,
+  2. queries the teacher for the correct leg-3 action,
+  3. aggregates those labels,
+  4. re-trains the student on the larger dataset.
 """
+from __future__ import annotations
+
 import argparse
+import json
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
+import torch
+from torch.utils.data import TensorDataset
 import yaml
 
-from envs import register_bark_envs
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-register_bark_envs()
+from envs.scenario_library import apply_scenario, sample_scenario, scenario_pool
+from pretrained.load_teacher import GO1_LEG3_JOINT_IX, load_teacher, make_go1_env, split_obs_and_action
+from train.train_supervised import DEFAULT_DATA, ProstheticMLP, fit_model, split_dataset
 
-import gymnasium as gym
-
-
-def load_config(path: str) -> dict:
-    with open(path) as f:
-        return yaml.safe_load(f)
+REPO = Path(__file__).resolve().parent.parent
+SAVE_DIR = REPO / "models" / "imitation_prosthetic"
 
 
-def collect_expert_rollouts(
-    env_id: str,
-    n_trajectories: int = 50,
-    max_steps: int = 500,
-    seed: int = 0,
-    policy=None,
-    save_path: Optional[str] = None,
-) -> tuple[list[np.ndarray], list[np.ndarray]]:
-    """
-    Collect (obs_list, act_list) from env. If policy is None, use random policy for demo.
-    """
-    env = gym.make(env_id)
-    rng = np.random.default_rng(seed)
-    obs_list, act_list = [], []
-    for _ in range(n_trajectories):
-        obs, _ = env.reset(seed=int(rng.integers(0, 1e9)))
-        o_traj, a_traj = [obs], []
-        for _ in range(max_steps - 1):
-            if policy is not None:
-                act, _ = policy.predict(obs, deterministic=True)
-            else:
-                act = env.action_space.sample()
-            a_traj.append(act)
-            obs, _, term, trunc, _ = env.step(act)
-            o_traj.append(obs)
-            if term or trunc:
+def load_npz_dataset(path: Path) -> dict[str, np.ndarray]:
+    data = np.load(path)
+    result = {key: data[key] for key in data.files}
+    print(f"Loaded base dataset from {path}: {result['obs_3leg'].shape[0]} samples")
+    return result
+
+
+def make_model(obs_dim: int, hidden: list[int], device: str, checkpoint: Path | None = None) -> ProstheticMLP:
+    model = ProstheticMLP(obs_dim, action_dim=3, hidden=hidden).to(device)
+    if checkpoint and checkpoint.exists():
+        state = torch.load(checkpoint, map_location=device, weights_only=True)
+        model.load_state_dict(state)
+    model.eval()
+    return model
+
+
+def collect_dagger_data(
+    model: ProstheticMLP,
+    teacher,
+    steps: int,
+    scenario_pool_name: str,
+    mass_rand_pct: float,
+    friction_rand_pct: float,
+    seed: int,
+    device: str,
+) -> dict[str, np.ndarray]:
+    rng = np.random.RandomState(seed)
+    env = make_go1_env(render=False)
+    pool = scenario_pool(scenario_pool_name)
+
+    obs_list = []
+    action_list = []
+    desired_vel_list = []
+    scenario_name_list = []
+    scenario_id_list = []
+    slope_list = []
+
+    collected = 0
+    episodes = 0
+    while collected < steps:
+        spec = sample_scenario(rng, scenario_pool_name)
+        spec_idx = next(i for i, pool_spec in enumerate(pool) if pool_spec.name == spec.name)
+        apply_scenario(env, spec, rng, mass_rand_pct=mass_rand_pct, friction_rand_pct=friction_rand_pct)
+        obs, _ = env.reset(seed=seed + episodes)
+        episodes += 1
+
+        while collected < steps:
+            teacher_action, _ = teacher.predict(obs, deterministic=True)
+            obs_3leg, teacher_leg3 = split_obs_and_action(obs, teacher_action)
+
+            with torch.no_grad():
+                pred = model(torch.from_numpy(obs_3leg).unsqueeze(0).to(device)).squeeze(0).cpu().numpy()
+
+            combined = teacher_action.copy()
+            combined[GO1_LEG3_JOINT_IX] = pred
+
+            obs_list.append(obs_3leg.astype(np.float32))
+            action_list.append(teacher_leg3.astype(np.float32))
+            desired_vel_list.append(np.array(spec.desired_velocity, dtype=np.float32))
+            scenario_name_list.append(spec.name)
+            scenario_id_list.append(spec_idx)
+            slope_list.append(float(spec.slope_pitch_deg))
+
+            obs, _, terminated, truncated, _ = env.step(combined)
+            collected += 1
+            if terminated or truncated:
                 break
-        obs_list.append(np.array(o_traj))
-        act_list.append(np.array(a_traj))
+
     env.close()
-    if save_path:
-        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-        np.savez(
-            save_path,
-            obs=[o for o in obs_list],
-            acts=[a for a in act_list],
+    print(f"Collected {collected} DAgger samples across {episodes} episodes")
+    return {
+        "obs_3leg": np.array(obs_list, dtype=np.float32),
+        "action_leg3": np.array(action_list, dtype=np.float32),
+        "desired_velocity": np.array(desired_vel_list, dtype=np.float32),
+        "scenario_name": np.array(scenario_name_list),
+        "scenario_id": np.array(scenario_id_list, dtype=np.int32),
+        "slope_pitch_deg": np.array(slope_list, dtype=np.float32),
+    }
+
+
+def concat_datasets(base: dict[str, np.ndarray], extra: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    result = {}
+    keys = sorted(set(base.keys()) | set(extra.keys()))
+    for key in keys:
+        if key in base and key in extra:
+            result[key] = np.concatenate([base[key], extra[key]], axis=0)
+        elif key in base:
+            result[key] = base[key]
+        else:
+            result[key] = extra[key]
+    return result
+
+
+def train_il(
+    data_path: Path = DEFAULT_DATA,
+    hidden: list[int] = [256, 256, 128],
+    lr: float = 3e-4,
+    batch_size: int = 2048,
+    epochs: int = 18,
+    device: str = "cuda" if torch.cuda.is_available() else "cpu",
+    num_workers: int = 4,
+    patience: int = 6,
+    dagger_iterations: int = 3,
+    dagger_steps_per_iter: int = 120_000,
+    scenario_pool_name: str = "all_train",
+    mass_rand_pct: float = 0.10,
+    friction_rand_pct: float = 0.20,
+    teacher_model_path: str | None = None,
+    bootstrap_checkpoint: Path | None = None,
+):
+    SAVE_DIR.mkdir(parents=True, exist_ok=True)
+    base = load_npz_dataset(data_path)
+    aggregate = dict(base)
+
+    teacher = load_teacher(teacher_model_path)
+    iteration_logs = []
+    checkpoint = bootstrap_checkpoint if bootstrap_checkpoint and bootstrap_checkpoint.exists() else None
+
+    for iteration in range(dagger_iterations + 1):
+        print(f"\n=== IL iteration {iteration}/{dagger_iterations} ===")
+        X = torch.from_numpy(aggregate["obs_3leg"])
+        y = torch.from_numpy(aggregate["action_leg3"])
+        train_ds, val_ds = split_dataset(TensorDataset(X, y), val_fraction=0.1)
+
+        initial_state = None
+        if checkpoint and checkpoint.exists():
+            initial_state = torch.load(checkpoint, map_location=device, weights_only=True)
+
+        model, train_log = fit_model(
+            train_ds=train_ds,
+            val_ds=val_ds,
+            save_dir=SAVE_DIR,
+            hidden=hidden,
+            lr=lr,
+            batch_size=batch_size,
+            epochs=epochs,
+            device=device,
+            num_workers=num_workers,
+            patience=patience,
+            initial_state_dict=initial_state,
+            onnx_name="prosthetic_il.onnx",
         )
-    return obs_list, act_list
+        checkpoint = SAVE_DIR / "best_model.pt"
+        iteration_logs.append(
+            {
+                "iteration": iteration,
+                "dataset_size": int(X.shape[0]),
+                "best_val_loss": float(train_log["best_val_loss"]),
+            }
+        )
+
+        if iteration == dagger_iterations:
+            break
+
+        student = make_model(X.shape[1], hidden, device, checkpoint=checkpoint)
+        extra = collect_dagger_data(
+            student,
+            teacher,
+            steps=dagger_steps_per_iter,
+            scenario_pool_name=scenario_pool_name,
+            mass_rand_pct=mass_rand_pct,
+            friction_rand_pct=friction_rand_pct,
+            seed=1234 + iteration,
+            device=device,
+        )
+        aggregate = concat_datasets(aggregate, extra)
+        np.savez_compressed(SAVE_DIR / "aggregated_rollouts.npz", **aggregate)
+
+    metadata = {
+        "base_data_path": str(data_path),
+        "scenario_pool": scenario_pool_name,
+        "dagger_iterations": dagger_iterations,
+        "dagger_steps_per_iter": dagger_steps_per_iter,
+        "mass_rand_pct": mass_rand_pct,
+        "friction_rand_pct": friction_rand_pct,
+        "total_samples": int(aggregate["obs_3leg"].shape[0]),
+        "iterations": iteration_logs,
+    }
+    (SAVE_DIR / "dagger_metadata.json").write_text(json.dumps(metadata, indent=2))
+    print(f"Saved IL artifacts to {SAVE_DIR}")
+    return metadata
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="configs/bc_ant_3leg.yaml")
-    parser.add_argument("--expert_path", type=str, default=None, help=".npz with 'obs' and 'acts' arrays")
-    parser.add_argument("--collect_demos", type=int, default=0, help="If >0, collect this many random demos first and save to expert_path")
-    parser.add_argument("--algorithm", type=str, choices=["bc", "gail"], default="bc")
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--config", type=str, default=None)
+    parser.add_argument("--data", type=str, default=None)
+    parser.add_argument("--epochs", type=int, default=18)
+    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--batch-size", type=int, default=2048)
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--patience", type=int, default=6)
+    parser.add_argument("--dagger-iterations", type=int, default=3)
+    parser.add_argument("--dagger-steps-per-iter", type=int, default=120000)
+    parser.add_argument("--scenario-pool", type=str, default="all_train")
+    parser.add_argument("--bootstrap", type=str, default="models/supervised_prosthetic/best_model.pt")
     args = parser.parse_args()
-    _repo_root = Path(__file__).resolve().parent.parent
-    config_path = Path(args.config)
-    if not config_path.is_absolute():
-        config_path = _repo_root / config_path
-    config = load_config(str(config_path))
-    env_id = config.get("env_id", "BarkAnt3Leg-v0")
-    collect_demos = getattr(args, "collect_demos", 0)
-    if collect_demos > 0:
-        expert_path = args.expert_path or "demos/expert_rollouts.npz"
-        if not Path(expert_path).is_absolute():
-            expert_path = str(_repo_root / expert_path)
-        collect_expert_rollouts(
-            env_id,
-            n_trajectories=collect_demos,
-            max_steps=config.get("max_episode_steps", 500),
-            seed=args.seed,
-            save_path=expert_path,
-        )
-        print(f"Saved {collect_demos} demos to {expert_path}")
-        return
 
-    expert_path = args.expert_path
-    if expert_path:
-        expert_path = Path(expert_path)
-        if not expert_path.is_absolute():
-            # Try repo root first, then cwd (for python -m from repo root)
-            for base in (_repo_root, Path.cwd()):
-                p = base / expert_path
-                if p.exists():
-                    expert_path = p
-                    break
-            else:
-                expert_path = _repo_root / expert_path
-    else:
-        expert_path = None
-    if not expert_path or not expert_path.exists():
-        if expert_path:
-            print(f"Expert file not found: {expert_path}. Tried repo root: {_repo_root}")
-        else:
-            print("No expert_path provided. Run with --collect_demos 30 to create demos first.")
-        return
-
-    data = np.load(str(expert_path), allow_pickle=True)
-    assert "obs" in data and "acts" in data, "npz must contain 'obs' and 'acts'"
-    expert_obs = data["obs"].tolist() if data["obs"].ndim == 0 else list(data["obs"])
-    expert_acts = data["acts"].tolist() if data["acts"].ndim == 0 else list(data["acts"])
-    print(f"Loaded {len(expert_obs)} expert trajectories", flush=True)
-
-    try:
-        from imitation.algorithms import bc
-        from imitation.data import rollout
-        from imitation.data.types import TrajectoryWithRew
-        from stable_baselines3.common.vec_env import DummyVecEnv
-    except ImportError as e:
-        print("imitation library not installed: pip install imitation", e)
-        return
-
-    env = gym.make(env_id)
-    # Build imitation trajectories (reward can be dummy)
-    trajs = []
-    for o, a in zip(expert_obs, expert_acts):
-        if len(o) < 2 or len(a) < 1:
-            continue
-        # terminal: True if trajectory ended (e.g. done); imitation expects this
-        trajs.append(
-            TrajectoryWithRew(
-                obs=o,
-                acts=a,
-                rews=np.zeros(len(a)),
-                infos=None,
-                terminal=True,
-            )
-        )
-    if not trajs:
-        print("No valid trajectories")
-        return
-
-    n_transitions = sum(len(t.acts) for t in trajs)
-    batch_size = min(config.get("batch_size", 64), max(1, n_transitions // 2))
-    rng = np.random.default_rng(args.seed)
-    lr = config.get("learning_rate", 3e-4)
-    bc_trainer = bc.BC(
-        observation_space=env.observation_space,
-        action_space=env.action_space,
-        demonstrations=trajs,
-        rng=rng,
-        batch_size=batch_size,
-        optimizer_kwargs=dict(lr=lr),
+    kwargs = dict(
+        hidden=[256, 256, 128],
+        lr=args.lr,
+        batch_size=args.batch_size,
+        epochs=args.epochs,
+        device=args.device,
+        num_workers=args.num_workers,
+        patience=args.patience,
+        dagger_iterations=args.dagger_iterations,
+        dagger_steps_per_iter=args.dagger_steps_per_iter,
+        scenario_pool_name=args.scenario_pool,
+        bootstrap_checkpoint=(Path(args.bootstrap) if args.bootstrap and Path(args.bootstrap).is_absolute() else (REPO / args.bootstrap) if args.bootstrap else None),
     )
-    n_epochs = config.get("n_epochs", 10)
-    bc_trainer.train(n_epochs=n_epochs)
-    env.close()
+    if args.data:
+        kwargs["data_path"] = Path(args.data)
+    if args.config:
+        with open(args.config, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        kwargs.update(
+            {
+                "data_path": Path(cfg.get("data_path", kwargs.get("data_path", DEFAULT_DATA))),
+                "hidden": cfg.get("hidden", kwargs["hidden"]),
+                "lr": cfg.get("lr", kwargs["lr"]),
+                "batch_size": cfg.get("batch_size", kwargs["batch_size"]),
+                "epochs": cfg.get("epochs", kwargs["epochs"]),
+                "num_workers": cfg.get("num_workers", kwargs["num_workers"]),
+                "patience": cfg.get("patience", kwargs["patience"]),
+                "scenario_pool_name": cfg.get("scenario_pool", kwargs["scenario_pool_name"]),
+                "dagger_iterations": cfg.get("dagger_iterations", kwargs["dagger_iterations"]),
+                "dagger_steps_per_iter": cfg.get("dagger_steps_per_iter", kwargs["dagger_steps_per_iter"]),
+                "mass_rand_pct": cfg.get("data_gen_mass_rand", 0.10),
+                "friction_rand_pct": cfg.get("data_gen_friction_rand", 0.20),
+                "teacher_model_path": cfg.get("teacher_model_path"),
+            }
+        )
 
-    save_path = Path(config.get("save_path", "models/il_bc"))
-    save_path.mkdir(parents=True, exist_ok=True)
-    bc_trainer.policy.save(save_path / "policy")
-    print("BC policy saved to", save_path, flush=True)
+    train_il(**kwargs)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,39 @@
+graph TB
+    subgraph full["Full Observation (37D)"]
+        direction LR
+        O1["x, y, z<br/><i>3D position</i>"]
+        O2["qw, qx, qy, qz<br/><i>4D orientation</i>"]
+        O3["FR hip,thigh,calf<br/><i>3D joint pos</i>"]
+        O4["FL hip,thigh,calf<br/><i>3D joint pos</i>"]
+        O5["RR hip,thigh,calf<br/><i>3D joint pos</i>"]
+        O6["<b>RL hip,thigh,calf</b><br/><i>3D joint pos</i>"]
+        O7["vx, vy, vz<br/>wx, wy, wz<br/><i>6D torso vel</i>"]
+        O8["FR, FL, RR<br/><i>9D joint vel</i>"]
+        O9["<b>RL joint vel</b><br/><i>3D</i>"]
+    end
+
+    subgraph masked["3-Leg Observation (31D)"]
+        direction LR
+        M1["x, y, z<br/><i>3D</i>"]
+        M2["qw, qx, qy, qz<br/><i>4D</i>"]
+        M3["FR joints<br/><i>3D</i>"]
+        M4["FL joints<br/><i>3D</i>"]
+        M5["RR joints<br/><i>3D</i>"]
+        M6["torso vel<br/><i>6D</i>"]
+        M7["FR,FL,RR vel<br/><i>9D</i>"]
+    end
+
+    subgraph target["Student Target (3D)"]
+        direction LR
+        T1["RL hip<br/>target"]
+        T2["RL thigh<br/>target"]
+        T3["RL calf<br/>target"]
+    end
+
+    O6 -.->|"REMOVED<br/>indices 16,17,18"| target
+    O9 -.->|"REMOVED<br/>indices 34,35,36"| target
+
+    style O6 fill:#e74c3c,color:#fff
+    style O9 fill:#e74c3c,color:#fff
+    style target fill:#3498db,color:#fff
+    style masked fill:#2ecc71,color:#000

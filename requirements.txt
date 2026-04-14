@@ -26,3 +26,6 @@ scipy>=1.11
 # Visualization (scripts/visualize_training.py)
 matplotlib>=3.7
 tensorboard>=2.14
+
+# Hugging Face (pretrained/import_hf_teacher.py)
+huggingface_hub>=0.20

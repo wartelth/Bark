@@ -1,0 +1,29 @@
+graph LR
+    subgraph env["MuJoCo Go1 Environment"]
+        E1["Flat terrain"]
+        E2["Slopes ±5°"]
+        E3["Push perturbations"]
+        E4["Mass ±15%"]
+        E5["Friction ±30%"]
+        E6["Obs noise<br/><i>mimics real IMU</i>"]
+    end
+
+    subgraph loop["Data Collection Loop"]
+        L1["Teacher walks<br/><i>deterministic</i>"] --> L2["Record per step"]
+        L2 --> L3["obs_3leg<br/><i>31D float32</i>"]
+        L2 --> L4["action_leg3<br/><i>3D float32</i>"]
+        L2 --> L5["action_full<br/><i>12D float32</i>"]
+        L3 & L4 & L5 --> L6["Append to buffer"]
+        L6 -->|"next step"| L1
+    end
+
+    subgraph output["Output"]
+        O1["teacher_rollouts.npz<br/><b>1M+ transitions</b><br/>obs_3leg: (N, 31)<br/>action_leg3: (N, 3)<br/>action_full: (N, 12)"]
+    end
+
+    env --> loop
+    L6 --> O1
+
+    style env fill:#f4ecf7,stroke:#8e44ad
+    style loop fill:#eaf2f8,stroke:#2980b9
+    style output fill:#e8f8f5,stroke:#1abc9c

@@ -1,0 +1,34 @@
+graph LR
+    subgraph P1["Phase 1: Teacher"]
+        T1["MuJoCo Go1<br/>Ant-v5 env"] --> T2["PPO Training<br/>2M steps × 4 envs"]
+        T2 --> T3["teacher_final.zip<br/><b>37D obs → 12D action</b>"]
+    end
+
+    subgraph P2["Phase 2: Data"]
+        T3 --> D1["Run teacher<br/>1M+ steps"]
+        D1 --> D2["Domain Randomization<br/>mass ±15%, friction ±30%<br/>obs noise, perturbations"]
+        D2 --> D3["teacher_rollouts.npz<br/><b>obs_3leg (31D)<br/>action_leg3 (3D)</b>"]
+    end
+
+    subgraph P3a["Phase 3a: Supervised"]
+        D3 --> S1["MLP [256,256,128]<br/>MSE loss"]
+        S1 --> S2["prosthetic.onnx<br/><b>31D → 3D</b>"]
+    end
+
+    subgraph P3b["Phase 3b: RL"]
+        T3 --> R1["ProstheticGo1Env<br/>teacher controls legs 0-2"]
+        R1 --> R2["PPO Student<br/>controls only leg 3"]
+        R2 --> R3["prosthetic_rl.zip<br/><b>31D → 3D</b>"]
+    end
+
+    subgraph P4["Phase 4: Validate"]
+        S2 --> V1["MSE vs teacher"]
+        R3 --> V1
+        V1 --> V2["Reward retention<br/>Gait symmetry<br/>Robustness"]
+    end
+
+    style P1 fill:#fef9e7,stroke:#f39c12
+    style P2 fill:#eaf2f8,stroke:#2980b9
+    style P3a fill:#e8f8f5,stroke:#1abc9c
+    style P3b fill:#f4ecf7,stroke:#8e44ad
+    style P4 fill:#fdf2e9,stroke:#e67e22

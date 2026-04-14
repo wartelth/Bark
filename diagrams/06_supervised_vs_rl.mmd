@@ -1,0 +1,37 @@
+graph TB
+    DATA["teacher_rollouts.npz<br/><b>1M+ paired samples</b>"]
+
+    subgraph sup["Approach A: Supervised Learning"]
+        S1["DataLoader<br/>batch=256, shuffle"]
+        S2["MLP [256,256,128]<br/><i>107K params</i>"]
+        S3["MSE Loss<br/>pred vs teacher leg3"]
+        S4["Adam lr=3e-4<br/>50 epochs"]
+        S5["Export ONNX<br/><i>prosthetic.onnx</i>"]
+        S1 --> S2 --> S3 --> S4 --> S5
+    end
+
+    subgraph rl["Approach B: RL (PPO)"]
+        R1["ProstheticGo1Env<br/><i>teacher frozen on legs 0-2</i>"]
+        R2["Student controls<br/>only leg 3 (3D)"]
+        R3["Reward:<br/>−tracking_error<br/>+forward_vel<br/>+alive"]
+        R4["PPO 2M steps<br/>clip=0.2, lr=3e-4"]
+        R5["Save best<br/><i>prosthetic_rl.zip</i>"]
+        R1 --> R2 --> R3 --> R4 --> R5
+    end
+
+    DATA --> S1
+    DATA -.->|"not needed<br/>(learns online)"| R1
+
+    subgraph compare["Comparison"]
+        C1["MSE vs teacher"]
+        C2["Reward retention %"]
+        C3["Robustness to noise"]
+    end
+
+    S5 --> compare
+    R5 --> compare
+
+    style sup fill:#e8f8f5,stroke:#1abc9c
+    style rl fill:#f4ecf7,stroke:#8e44ad
+    style compare fill:#fdf2e9,stroke:#e67e22
+    style DATA fill:#eaf2f8,stroke:#2980b9
